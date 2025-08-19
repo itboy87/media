@@ -15,6 +15,7 @@
  */
 package androidx.media3.exoplayer.audio;
 
+import static android.os.Build.VERSION.SDK_INT;
 import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.DISCARD_REASON_DRM_SESSION_CHANGED;
 import static androidx.media3.exoplayer.DecoderReuseEvaluation.DISCARD_REASON_REUSE_NOT_IMPLEMENTED;
@@ -22,6 +23,7 @@ import static androidx.media3.exoplayer.DecoderReuseEvaluation.REUSE_RESULT_NO;
 import static androidx.media3.exoplayer.source.SampleStream.FLAG_REQUIRE_FORMAT;
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static java.lang.Math.max;
+import static java.lang.Math.min;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import android.media.AudioDeviceInfo;
@@ -165,6 +167,10 @@ public abstract class DecoderAudioRenderer<
   private final long[] pendingOutputStreamOffsetsUs;
   private int pendingOutputStreamOffsetCount;
   private boolean hasPendingReportedSkippedSilence;
+  private boolean isStarted;
+  private long largestQueuedPresentationTimeUs;
+  private long lastBufferInStreamPresentationTimeUs;
+  private long nextBufferToWritePresentationTimeUs;
 
   public DecoderAudioRenderer() {
     this(/* eventHandler= */ null, /* eventListener= */ null);
@@ -226,12 +232,44 @@ public abstract class DecoderAudioRenderer<
     audioTrackNeedsConfigure = true;
     setOutputStreamOffsetUs(C.TIME_UNSET);
     pendingOutputStreamOffsetsUs = new long[MAX_PENDING_OUTPUT_STREAM_OFFSET_COUNT];
+    largestQueuedPresentationTimeUs = C.TIME_UNSET;
+    lastBufferInStreamPresentationTimeUs = C.TIME_UNSET;
+    nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
   }
 
   @Override
   @Nullable
   public MediaClock getMediaClock() {
     return this;
+  }
+
+  @Override
+  public long getDurationToProgressUs(long positionUs, long elapsedRealtimeUs) {
+    boolean audioSinkBufferFull = nextBufferToWritePresentationTimeUs != C.TIME_UNSET;
+    if (!isStarted) {
+      // When not started we can only make further progress if the audio track buffer isn't filled
+      // yet and there is more data to fill it.
+      return audioSinkBufferFull || outputStreamEnded
+          ? DEFAULT_IDLE_DURATION_TO_PROGRESS_US
+          : DEFAULT_DURATION_TO_PROGRESS_US;
+    }
+    long audioTrackBufferDurationUs = audioSink.getAudioTrackBufferSizeUs();
+    if (!audioSinkBufferFull || audioTrackBufferDurationUs == C.TIME_UNSET) {
+      // If the AudioSink buffer is not yet full or getting the audio track buffer size is
+      // unsupported, continue calling with default duration to progress.
+      return DEFAULT_DURATION_TO_PROGRESS_US;
+    }
+    // Compare written, yet-to-play content duration against the audio track buffer size.
+    long writtenDurationUs = (nextBufferToWritePresentationTimeUs - positionUs);
+    long bufferedDurationUs = min(audioTrackBufferDurationUs, writtenDurationUs);
+    bufferedDurationUs =
+        (long)
+            (bufferedDurationUs
+                / (getPlaybackParameters() != null ? getPlaybackParameters().speed : 1.0f)
+                / 2);
+    // Account for the elapsed time since the start of this iteration of the rendering loop.
+    bufferedDurationUs -= Util.msToUs(getClock().elapsedRealtime()) - elapsedRealtimeUs;
+    return max(DEFAULT_DURATION_TO_PROGRESS_US, bufferedDurationUs);
   }
 
   @Override
@@ -279,6 +317,7 @@ public abstract class DecoderAudioRenderer<
     if (outputStreamEnded) {
       try {
         audioSink.playToEndOfStream();
+        nextBufferToWritePresentationTimeUs = lastBufferInStreamPresentationTimeUs;
       } catch (AudioSink.WriteException e) {
         throw createRendererException(
             e, e.format, e.isRecoverable, PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED);
@@ -418,7 +457,6 @@ public abstract class DecoderAudioRenderer<
         processFirstSampleOfStream();
       }
     }
-
     if (outputBuffer.isEndOfStream()) {
       if (decoderReinitializationState == REINITIALIZATION_STATE_WAIT_END_OF_STREAM) {
         // We're waiting to re-initialize the decoder, and have now processed all final buffers.
@@ -438,6 +476,7 @@ public abstract class DecoderAudioRenderer<
       }
       return false;
     }
+    nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
 
     if (audioTrackNeedsConfigure) {
       Format outputFormat =
@@ -464,6 +503,10 @@ public abstract class DecoderAudioRenderer<
       outputBuffer.release();
       outputBuffer = null;
       return true;
+    } else {
+      // Downstream buffers are full, set nextBufferToWritePresentationTimeUs to the presentation
+      // time of the current 'to be written' sample.
+      nextBufferToWritePresentationTimeUs = outputBuffer.timeUs;
     }
 
     return false;
@@ -516,6 +559,10 @@ public abstract class DecoderAudioRenderer<
     FormatHolder formatHolder = getFormatHolder();
     switch (readSource(formatHolder, inputBuffer, /* readFlags= */ 0)) {
       case C.RESULT_NOTHING_READ:
+        if (hasReadStreamToEnd()) {
+          // Notify output queue of the last buffer's timestamp.
+          lastBufferInStreamPresentationTimeUs = largestQueuedPresentationTimeUs;
+        }
         return false;
       case C.RESULT_FORMAT_READ:
         onInputFormatChanged(formatHolder);
@@ -523,6 +570,7 @@ public abstract class DecoderAudioRenderer<
       case C.RESULT_BUFFER_READ:
         if (inputBuffer.isEndOfStream()) {
           inputStreamEnded = true;
+          lastBufferInStreamPresentationTimeUs = largestQueuedPresentationTimeUs;
           decoder.queueInputBuffer(inputBuffer);
           inputBuffer = null;
           return false;
@@ -530,6 +578,10 @@ public abstract class DecoderAudioRenderer<
         if (!firstStreamSampleRead) {
           firstStreamSampleRead = true;
           inputBuffer.addFlag(C.BUFFER_FLAG_FIRST_SAMPLE);
+        }
+        largestQueuedPresentationTimeUs = inputBuffer.timeUs;
+        if (hasReadStreamToEnd() || inputBuffer.isLastSample()) {
+          lastBufferInStreamPresentationTimeUs = largestQueuedPresentationTimeUs;
         }
         inputBuffer.flip();
         inputBuffer.format = inputFormat;
@@ -546,6 +598,7 @@ public abstract class DecoderAudioRenderer<
   private void processEndOfStream() throws AudioSink.WriteException {
     outputStreamEnded = true;
     audioSink.playToEndOfStream();
+    nextBufferToWritePresentationTimeUs = lastBufferInStreamPresentationTimeUs;
   }
 
   private void flushDecoder() throws ExoPlaybackException {
@@ -620,6 +673,7 @@ public abstract class DecoderAudioRenderer<
     audioSink.flush();
 
     currentPositionUs = positionUs;
+    nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
     hasPendingReportedSkippedSilence = false;
     allowPositionDiscontinuity = true;
     inputStreamEnded = false;
@@ -632,12 +686,14 @@ public abstract class DecoderAudioRenderer<
   @Override
   protected void onStarted() {
     audioSink.play();
+    isStarted = true;
   }
 
   @Override
   protected void onStopped() {
     updateCurrentPosition();
     audioSink.pause();
+    isStarted = false;
   }
 
   @Override
@@ -646,6 +702,7 @@ public abstract class DecoderAudioRenderer<
     audioTrackNeedsConfigure = true;
     setOutputStreamOffsetUs(C.TIME_UNSET);
     hasPendingReportedSkippedSilence = false;
+    nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
     try {
       setSourceDrmSession(null);
       releaseDecoder();
@@ -701,7 +758,7 @@ public abstract class DecoderAudioRenderer<
         audioSink.setAudioSessionId((Integer) message);
         break;
       case MSG_SET_PREFERRED_AUDIO_DEVICE:
-        if (Util.SDK_INT >= 23) {
+        if (SDK_INT >= 23) {
           Api23.setAudioSinkPreferredDevice(audioSink, message);
         }
         break;
@@ -767,6 +824,8 @@ public abstract class DecoderAudioRenderer<
     outputBuffer = null;
     decoderReinitializationState = REINITIALIZATION_STATE_NONE;
     decoderReceivedBuffers = false;
+    largestQueuedPresentationTimeUs = C.TIME_UNSET;
+    lastBufferInStreamPresentationTimeUs = C.TIME_UNSET;
     if (decoder != null) {
       decoderCounters.decoderReleaseCount++;
       decoder.release();
@@ -879,6 +938,16 @@ public abstract class DecoderAudioRenderer<
     @Override
     public void onAudioTrackReleased(AudioSink.AudioTrackConfig audioTrackConfig) {
       eventDispatcher.audioTrackReleased(audioTrackConfig);
+    }
+
+    @Override
+    public void onAudioSessionIdChanged(int audioSessionId) {
+      eventDispatcher.audioSessionIdChanged(audioSessionId);
+    }
+
+    @Override
+    public void onAudioCapabilitiesChanged() {
+      DecoderAudioRenderer.this.onRendererCapabilitiesChanged();
     }
   }
 

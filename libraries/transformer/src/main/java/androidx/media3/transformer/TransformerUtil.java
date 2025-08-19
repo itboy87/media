@@ -18,7 +18,7 @@ package androidx.media3.transformer;
 
 import static androidx.media3.common.ColorInfo.SDR_BT709_LIMITED;
 import static androidx.media3.common.ColorInfo.isTransferHdr;
-import static androidx.media3.common.util.Assertions.checkArgument;
+import static androidx.media3.exoplayer.mediacodec.MediaCodecUtil.getAlternativeCodecMimeType;
 import static androidx.media3.transformer.Composition.HDR_MODE_KEEP_HDR;
 import static androidx.media3.transformer.Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL;
 import static androidx.media3.transformer.EncoderUtil.getSupportedEncodersForHdrEditing;
@@ -28,8 +28,11 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
+import android.media.metrics.LogSessionId;
 import android.util.Pair;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.media3.common.C;
 import androidx.media3.common.ColorInfo;
 import androidx.media3.common.Effect;
@@ -87,8 +90,6 @@ public final class TransformerUtil {
       MuxerWrapper muxerWrapper) {
     if (composition.sequences.size() > 1
         || composition.sequences.get(sequenceIndex).editedMediaItems.size() > 1) {
-      checkArgument(
-          !composition.hasGaps() || !composition.transmuxAudio, "Gaps can not be transmuxed.");
       return !composition.transmuxAudio;
     }
     if (composition.hasGaps()) {
@@ -153,12 +154,18 @@ public final class TransformerUtil {
     if (transformationRequest.hdrMode != HDR_MODE_KEEP_HDR) {
       return true;
     }
-    if (transformationRequest.videoMimeType != null
-        && !transformationRequest.videoMimeType.equals(inputFormat.sampleMimeType)) {
-      return true;
+    @Nullable String requestedMimeType = transformationRequest.videoMimeType;
+    if (requestedMimeType != null) {
+      boolean requestedMimeTypeEqualsPrimaryOrAlternativeMimeType =
+          requestedMimeType.equals(inputFormat.sampleMimeType)
+              || requestedMimeType.equals(getAlternativeCodecMimeType(inputFormat));
+      if (!requestedMimeTypeEqualsPrimaryOrAlternativeMimeType) {
+        return true;
+      }
     }
-    if (transformationRequest.videoMimeType == null
-        && !muxerWrapper.supportsSampleMimeType(inputFormat.sampleMimeType)) {
+    if (requestedMimeType == null
+        && !muxerWrapper.supportsSampleMimeType(inputFormat.sampleMimeType)
+        && !muxerWrapper.supportsSampleMimeType(getAlternativeCodecMimeType(inputFormat))) {
       return true;
     }
     if (inputFormat.pixelWidthHeightRatio != 1f) {
@@ -366,6 +373,25 @@ public final class TransformerUtil {
         return MimeTypes.IMAGE_AVIF;
       default:
         return null;
+    }
+  }
+
+  /** Utility for setting LogSessionId on MediaFormat (API 35+). */
+  @RequiresApi(35)
+  public static final class Api35 {
+    private Api35() {}
+
+    /**
+     * Sets the log session ID to the provided {@link MediaFormat}.
+     *
+     * @param mediaFormat The {@link MediaFormat} to set the log session ID on.
+     * @param logSessionId The {@link LogSessionId} to set.
+     */
+    public static void setLogSessionIdToMediaCodecFormat(
+        MediaFormat mediaFormat, LogSessionId logSessionId) {
+      if (!logSessionId.equals(LogSessionId.LOG_SESSION_ID_NONE)) {
+        mediaFormat.setString("log-session-id", logSessionId.getStringId());
+      }
     }
   }
 }

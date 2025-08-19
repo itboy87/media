@@ -15,6 +15,7 @@
  */
 package androidx.media3.session;
 
+import static android.os.Build.VERSION.SDK_INT;
 import static androidx.media3.common.C.INDEX_UNSET;
 import static androidx.media3.common.Player.COMMAND_INVALID;
 import static androidx.media3.common.Player.COMMAND_PLAY_PAUSE;
@@ -22,7 +23,6 @@ import static androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS;
 import static androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM;
-import static androidx.media3.common.Player.COMMAND_STOP;
 import static androidx.media3.common.util.Assertions.checkState;
 import static androidx.media3.common.util.Assertions.checkStateNotNull;
 
@@ -46,6 +46,7 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.util.Util;
 import androidx.media3.session.MediaStyleNotificationHelper.MediaStyle;
 import com.google.common.collect.ImmutableList;
+import com.google.common.primitives.ImmutableIntArray;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -303,7 +304,6 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
       Callback onNotificationChangedCallback) {
     ensureNotificationChannel();
 
-    // TODO: b/332877990 - More accurately reflect media button preferences in the notification.
     ImmutableList.Builder<CommandButton> mediaButtonPreferencesWithEnabledCommandButtonsOnly =
         new ImmutableList.Builder<>();
     for (int i = 0; i < mediaButtonPreferences.size(); i++) {
@@ -372,15 +372,14 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
         .setShowWhen(displayElapsedTimeWithChronometer)
         .setUsesChronometer(displayElapsedTimeWithChronometer);
 
-    if (Util.SDK_INT >= 31) {
+    if (SDK_INT >= 31) {
       Api31.setForegroundServiceBehavior(builder);
     }
 
     Notification notification =
         builder
             .setContentIntent(mediaSession.getSessionActivity())
-            .setDeleteIntent(
-                actionFactory.createMediaActionPendingIntent(mediaSession, COMMAND_STOP))
+            .setDeleteIntent(actionFactory.createNotificationDismissalIntent(mediaSession))
             .setOnlyAlertOnce(true)
             .setSmallIcon(smallIconResourceId)
             .setStyle(mediaStyle)
@@ -445,55 +444,60 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
       Player.Commands playerCommands,
       ImmutableList<CommandButton> mediaButtonPreferences,
       boolean showPauseButton) {
-    // Skip to previous action.
+    ImmutableList<CommandButton> customLayout =
+        CommandButton.getCustomLayoutFromMediaButtonPreferences(
+            mediaButtonPreferences, /* backSlotAllowed= */ true, /* forwardSlotAllowed= */ true);
+    boolean hasCustomBackButton =
+        CommandButton.containsButtonForSlot(customLayout, CommandButton.SLOT_BACK);
+    boolean hasCustomForwardButton =
+        CommandButton.containsButtonForSlot(customLayout, CommandButton.SLOT_FORWARD);
+    int nextCustomLayoutIndex = 0;
+
     ImmutableList.Builder<CommandButton> commandButtons = new ImmutableList.Builder<>();
-    if (playerCommands.containsAny(COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)) {
-      Bundle commandButtonExtras = new Bundle();
-      commandButtonExtras.putInt(COMMAND_KEY_COMPACT_VIEW_INDEX, INDEX_UNSET);
+    if (hasCustomBackButton) {
+      commandButtons.add(
+          customLayout
+              .get(nextCustomLayoutIndex++)
+              .copyWithSlots(ImmutableIntArray.of(CommandButton.SLOT_BACK)));
+    } else if (playerCommands.containsAny(
+        COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)) {
       commandButtons.add(
           new CommandButton.Builder(CommandButton.ICON_PREVIOUS)
               .setPlayerCommand(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
               .setDisplayName(
                   context.getString(R.string.media3_controls_seek_to_previous_description))
-              .setExtras(commandButtonExtras)
               .build());
     }
     if (playerCommands.contains(COMMAND_PLAY_PAUSE)) {
-      Bundle commandButtonExtras = new Bundle();
-      commandButtonExtras.putInt(COMMAND_KEY_COMPACT_VIEW_INDEX, INDEX_UNSET);
       if (showPauseButton) {
         commandButtons.add(
             new CommandButton.Builder(CommandButton.ICON_PAUSE)
                 .setPlayerCommand(COMMAND_PLAY_PAUSE)
-                .setExtras(commandButtonExtras)
                 .setDisplayName(context.getString(R.string.media3_controls_pause_description))
                 .build());
       } else {
         commandButtons.add(
             new CommandButton.Builder(CommandButton.ICON_PLAY)
                 .setPlayerCommand(COMMAND_PLAY_PAUSE)
-                .setExtras(commandButtonExtras)
                 .setDisplayName(context.getString(R.string.media3_controls_play_description))
                 .build());
       }
     }
-    // Skip to next action.
-    if (playerCommands.containsAny(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
-      Bundle commandButtonExtras = new Bundle();
-      commandButtonExtras.putInt(COMMAND_KEY_COMPACT_VIEW_INDEX, INDEX_UNSET);
+    if (hasCustomForwardButton) {
+      commandButtons.add(
+          customLayout
+              .get(nextCustomLayoutIndex++)
+              .copyWithSlots(ImmutableIntArray.of(CommandButton.SLOT_FORWARD)));
+    } else if (playerCommands.containsAny(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
       commandButtons.add(
           new CommandButton.Builder(CommandButton.ICON_NEXT)
               .setPlayerCommand(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-              .setExtras(commandButtonExtras)
               .setDisplayName(context.getString(R.string.media3_controls_seek_to_next_description))
               .build());
     }
-    for (int i = 0; i < mediaButtonPreferences.size(); i++) {
-      CommandButton button = mediaButtonPreferences.get(i);
-      if (button.sessionCommand != null
-          && button.sessionCommand.commandCode == SessionCommand.COMMAND_CODE_CUSTOM) {
-        commandButtons.add(button);
-      }
+    for (int i = nextCustomLayoutIndex; i < customLayout.size(); i++) {
+      commandButtons.add(
+          customLayout.get(i).copyWithSlots(ImmutableIntArray.of(CommandButton.SLOT_OVERFLOW)));
     }
     return commandButtons.build();
   }
@@ -532,7 +536,7 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
     int[] defaultCompactViewIndices = new int[3];
     Arrays.fill(compactViewIndices, INDEX_UNSET);
     Arrays.fill(defaultCompactViewIndices, INDEX_UNSET);
-    int compactViewCommandCount = 0;
+    boolean hasCustomCompactViewIndices = false;
     for (int i = 0; i < mediaButtons.size(); i++) {
       CommandButton commandButton = mediaButtons.get(i);
       if (commandButton.sessionCommand != null) {
@@ -547,28 +551,22 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
                 commandButton.displayName,
                 commandButton.playerCommand));
       }
-      if (compactViewCommandCount == 3) {
-        continue;
-      }
       int compactViewIndex =
           commandButton.extras.getInt(
               COMMAND_KEY_COMPACT_VIEW_INDEX, /* defaultValue= */ INDEX_UNSET);
       if (compactViewIndex >= 0 && compactViewIndex < compactViewIndices.length) {
-        compactViewCommandCount++;
+        hasCustomCompactViewIndices = true;
         compactViewIndices[compactViewIndex] = i;
-      } else if (commandButton.playerCommand == COMMAND_SEEK_TO_PREVIOUS
-          || commandButton.playerCommand == COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
+      } else if (commandButton.slots.get(0) == CommandButton.SLOT_BACK) {
         defaultCompactViewIndices[0] = i;
-      } else if (commandButton.playerCommand == COMMAND_PLAY_PAUSE) {
+      } else if (commandButton.slots.get(0) == CommandButton.SLOT_CENTRAL) {
         defaultCompactViewIndices[1] = i;
-      } else if (commandButton.playerCommand == COMMAND_SEEK_TO_NEXT
-          || commandButton.playerCommand == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) {
+      } else if (commandButton.slots.get(0) == CommandButton.SLOT_FORWARD) {
         defaultCompactViewIndices[2] = i;
       }
     }
-    if (compactViewCommandCount == 0) {
-      // If there is no custom configuration we use the seekPrev (if any), play/pause (if any),
-      // seekNext (if any) action in compact view.
+    if (!hasCustomCompactViewIndices) {
+      // If there is no custom configuration we use the first slot preference as a proxy.
       int indexInCompactViewIndices = 0;
       for (int i = 0; i < defaultCompactViewIndices.length; i++) {
         if (defaultCompactViewIndices[i] == INDEX_UNSET) {
@@ -624,7 +622,7 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
   }
 
   private void ensureNotificationChannel() {
-    if (Util.SDK_INT < 26 || notificationManager.getNotificationChannel(channelId) != null) {
+    if (SDK_INT < 26 || notificationManager.getNotificationChannel(channelId) != null) {
       return;
     }
     Api26.createNotificationChannel(
@@ -685,7 +683,7 @@ public class DefaultMediaNotificationProvider implements MediaNotification.Provi
         NotificationManager notificationManager, String channelId, String channelName) {
       NotificationChannel channel =
           new NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW);
-      if (Util.SDK_INT <= 27) {
+      if (SDK_INT <= 27) {
         // API 28+ will automatically hide the app icon 'badge' for notifications using
         // Notification.MediaStyle, but we have to manually hide it for APIs 26 (when badges were
         // added) and 27.

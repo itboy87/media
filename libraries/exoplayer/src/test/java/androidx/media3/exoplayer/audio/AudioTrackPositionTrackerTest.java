@@ -16,7 +16,11 @@
 package androidx.media3.exoplayer.audio;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import android.media.AudioFormat;
 import android.media.AudioTrack;
@@ -69,21 +73,21 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
     // Advance and write to audio track at least twice to move rawHeadPosition past wrap point.
     for (int i = 0; i < 2; i++) {
       writeBytesAndAdvanceTime(audioTrack);
-      audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false);
+      audioTrackPositionTracker.getCurrentPositionUs();
     }
 
     // Reset audio track and write bytes to simulate position overflow.
     audioTrack.flush();
     writeBytesAndAdvanceTime(audioTrack);
 
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isGreaterThan(4294967296L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isGreaterThan(4294967296L);
   }
 
   @Test
@@ -93,13 +97,14 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
     // Advance and write to audio track at least twice to move rawHeadPosition past wrap point.
     for (int i = 0; i < 2; i++) {
       writeBytesAndAdvanceTime(audioTrack);
-      audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false);
+      audioTrackPositionTracker.getCurrentPositionUs();
     }
 
     // Reset audio track to simulate track reuse and transition.
@@ -109,8 +114,7 @@ public class AudioTrackPositionTrackerTest {
     writeBytesAndAdvanceTime(audioTrack);
 
     // Expected position is msToUs(# of writes)*TIME_TO_ADVANCE_MS.
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(3000000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(3000000L);
   }
 
   @Test
@@ -120,20 +124,20 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
     // Advance and write to audio track at least twice to move rawHeadPosition past wrap point.
     for (int i = 0; i < 2; i++) {
       writeBytesAndAdvanceTime(audioTrack);
-      audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false);
+      audioTrackPositionTracker.getCurrentPositionUs();
     }
     // Reset audio track to simulate track transition and set tracker to expect playback head reset.
     audioTrack.flush();
     audioTrackPositionTracker.expectRawPlaybackHeadReset();
     writeBytesAndAdvanceTime(audioTrack);
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(3000000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(3000000L);
 
     // Pause tracker, pause audio track, and advance time to test that position does not change
     // during pause
@@ -142,8 +146,7 @@ public class AudioTrackPositionTrackerTest {
     clock.advanceTime(TIME_TO_ADVANCE_MS);
 
     // Expected position is msToUs(# of writes)*TIME_TO_ADVANCE_MS.
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(3000000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(3000000L);
   }
 
   @Test
@@ -155,21 +158,21 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack1.play();
     // Advance and write to audio track at least twice to move rawHeadPosition past wrap point.
     for (int i = 0; i < 2; i++) {
       writeBytesAndAdvanceTime(audioTrack1);
-      audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false);
+      audioTrackPositionTracker.getCurrentPositionUs();
     }
     // Reset audio track and set tracker to expect playback head reset to simulate track transition.
     audioTrack1.flush();
     audioTrackPositionTracker.expectRawPlaybackHeadReset();
     writeBytesAndAdvanceTime(audioTrack1);
     // Test for correct setup with current position being accumulated position.
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(3000000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(3000000L);
 
     // Set new audio track and reset position tracker to simulate transition to new AudioTrack.
     audioTrackPositionTracker.reset();
@@ -178,14 +181,14 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack2.play();
     writeBytesAndAdvanceTime(audioTrack2);
 
     // Expected position is msToUs(1 write)*TIME_TO_ADVANCE_MS.
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(1000000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(1000000L);
   }
 
   @Test
@@ -197,21 +200,21 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
 
     // Advance and write to audio track at least twice to move rawHeadPosition past wrap point.
     for (int i = 0; i < 2; i++) {
       writeBytesAndAdvanceTime(audioTrack);
-      audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false);
+      audioTrackPositionTracker.getCurrentPositionUs();
     }
     // Reset audio track and write bytes to simulate position overflow.
     audioTrack.flush();
     writeBytesAndAdvanceTime(audioTrack);
 
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isGreaterThan(4294967296L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isGreaterThan(4294967296L);
   }
 
   @Test
@@ -221,7 +224,8 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
     for (int i = 0; i < 2; i++) {
@@ -234,8 +238,7 @@ public class AudioTrackPositionTrackerTest {
     // Advance time during paused state.
     clock.advanceTime(2_000L);
 
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(2_000_000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(2_000_000L);
   }
 
   @Test
@@ -245,7 +248,8 @@ public class AudioTrackPositionTrackerTest {
         /* isPassthrough= */ false,
         C.ENCODING_PCM_16BIT,
         OUTPUT_PCM_FRAME_SIZE,
-        MIN_BUFFER_SIZE);
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
     audioTrackPositionTracker.start();
     audioTrack.play();
     for (int i = 0; i < 2; i++) {
@@ -261,8 +265,157 @@ public class AudioTrackPositionTrackerTest {
     audioTrackPositionTracker.start();
     audioTrack.play();
 
-    assertThat(audioTrackPositionTracker.getCurrentPositionUs(/* sourceEnded= */ false))
-        .isEqualTo(2_000_000L);
+    assertThat(audioTrackPositionTracker.getCurrentPositionUs()).isEqualTo(2_000_000L);
+  }
+
+  @Test
+  public void onPositionAdvancing_isTriggeredWhenPlaying() {
+    AudioTrackPositionTracker.Listener listener = mock(AudioTrackPositionTracker.Listener.class);
+    AudioTrackPositionTracker audioTrackPositionTracker = new AudioTrackPositionTracker(listener);
+    audioTrackPositionTracker.setClock(clock);
+    audioTrackPositionTracker.setAudioTrack(
+        audioTrack,
+        /* isPassthrough= */ false,
+        C.ENCODING_PCM_16BIT,
+        OUTPUT_PCM_FRAME_SIZE,
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
+    // Start the tracker to set the initial position for advancing check.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Write data to advance the position.
+    writeBytesAndAdvanceTime(audioTrack);
+
+    // Call getCurrentPositionUs() to request an update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    verify(listener).onPositionAdvancing(anyLong());
+  }
+
+  @Test
+  public void onPositionAdvancing_isNotTriggeredWhenPaused() {
+    AudioTrackPositionTracker.Listener listener = mock(AudioTrackPositionTracker.Listener.class);
+    AudioTrackPositionTracker audioTrackPositionTracker = new AudioTrackPositionTracker(listener);
+    audioTrackPositionTracker.setClock(clock);
+    audioTrackPositionTracker.setAudioTrack(
+        audioTrack,
+        /* isPassthrough= */ false,
+        C.ENCODING_PCM_16BIT,
+        OUTPUT_PCM_FRAME_SIZE,
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
+    // Start the tracker to set the initial position for advancing check.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Write data to advance the position.
+    writeBytesAndAdvanceTime(audioTrack);
+    // Pause the tracker and audio track.
+    audioTrackPositionTracker.pause();
+    audioTrack.pause();
+
+    // Call getCurrentPositionUs() while stopped to request an update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    verify(listener, never()).onPositionAdvancing(anyLong());
+  }
+
+  @Test
+  public void onPositionAdvancing_isTriggeredAgainAfterPauseAndResume() {
+    AudioTrackPositionTracker.Listener listener = mock(AudioTrackPositionTracker.Listener.class);
+    AudioTrackPositionTracker audioTrackPositionTracker = new AudioTrackPositionTracker(listener);
+    audioTrackPositionTracker.setClock(clock);
+    audioTrackPositionTracker.setAudioTrack(
+        audioTrack,
+        /* isPassthrough= */ false,
+        C.ENCODING_PCM_16BIT,
+        OUTPUT_PCM_FRAME_SIZE,
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
+    // Start the tracker to set the initial position for advancing check.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Write data to advance the position.
+    writeBytesAndAdvanceTime(audioTrack);
+    // Call getCurrentPositionUs() to request an initial update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    // Pause the tracker and audio track.
+    audioTrackPositionTracker.pause();
+    audioTrack.pause();
+    // Call getCurrentPositionUs() while paused to request an update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+    // Write some more data to advance the position again.
+    writeBytesAndAdvanceTime(audioTrack);
+    // Start the tracker again.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Call getCurrentPositionUs() to request another update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    verify(listener, times(2)).onPositionAdvancing(anyLong());
+  }
+
+  @Test
+  public void onPositionAdvancing_isTriggeredWhenStopped() {
+    AudioTrackPositionTracker.Listener listener = mock(AudioTrackPositionTracker.Listener.class);
+    AudioTrackPositionTracker audioTrackPositionTracker = new AudioTrackPositionTracker(listener);
+    audioTrackPositionTracker.setClock(clock);
+    audioTrackPositionTracker.setAudioTrack(
+        audioTrack,
+        /* isPassthrough= */ false,
+        C.ENCODING_PCM_16BIT,
+        OUTPUT_PCM_FRAME_SIZE,
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
+    // Start the tracker to set the initial position for advancing check.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Write data to advance the position.
+    writeBytesAndAdvanceTime(audioTrack);
+    // Simulate stopping the track before the advancing callback is triggered.
+    audioTrackPositionTracker.handleEndOfStream(/* writtenFrames= */ SAMPLE_RATE);
+    audioTrack.stop();
+    verify(listener, never()).onPositionAdvancing(anyLong());
+
+    // Call getCurrentPositionUs() while the track is stopped to request an update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    verify(listener).onPositionAdvancing(anyLong());
+  }
+
+  @Test
+  public void onPositionAdvancing_isTriggeredAgainAfterStoppedPauseAndResume() {
+    AudioTrackPositionTracker.Listener listener = mock(AudioTrackPositionTracker.Listener.class);
+    AudioTrackPositionTracker audioTrackPositionTracker = new AudioTrackPositionTracker(listener);
+    audioTrackPositionTracker.setClock(clock);
+    audioTrackPositionTracker.setAudioTrack(
+        audioTrack,
+        /* isPassthrough= */ false,
+        C.ENCODING_PCM_16BIT,
+        OUTPUT_PCM_FRAME_SIZE,
+        MIN_BUFFER_SIZE,
+        /* enableOnAudioPositionAdvancingFix= */ true);
+    // Start the tracker to set the initial position for advancing check.
+    audioTrackPositionTracker.start();
+    audioTrack.play();
+    // Write data to advance the position.
+    writeBytesAndAdvanceTime(audioTrack);
+    // Simulate stopping the track before the advancing callback is triggered.
+    audioTrackPositionTracker.handleEndOfStream(/* writtenFrames= */ SAMPLE_RATE);
+    audioTrack.stop();
+    // Call getCurrentPositionUs() to request an initial update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    // Pause the tracker.
+    audioTrackPositionTracker.pause();
+    // Call getCurrentPositionUs() while paused to request an update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+    // Start the tracker again.
+    audioTrackPositionTracker.start();
+    // Call getCurrentPositionUs() to request another update.
+    audioTrackPositionTracker.getCurrentPositionUs();
+
+    verify(listener, times(2)).onPositionAdvancing(anyLong());
   }
 
   private void writeBytesAndAdvanceTime(AudioTrack audioTrack) {

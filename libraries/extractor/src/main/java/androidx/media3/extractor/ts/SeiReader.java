@@ -22,7 +22,7 @@ import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.Assertions;
 import androidx.media3.common.util.ParsableByteArray;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.container.ReorderingSeiMessageQueue;
+import androidx.media3.container.ReorderingBufferQueue;
 import androidx.media3.extractor.CeaUtil;
 import androidx.media3.extractor.ExtractorOutput;
 import androidx.media3.extractor.TrackOutput;
@@ -34,19 +34,22 @@ import java.util.List;
 public final class SeiReader {
 
   private final List<Format> closedCaptionFormats;
+  private final String containerMimeType;
   private final TrackOutput[] outputs;
-  private final ReorderingSeiMessageQueue reorderingSeiMessageQueue;
+  private final ReorderingBufferQueue reorderingBufferQueue;
 
   /**
    * @param closedCaptionFormats A list of formats for the closed caption channels to expose.
+   * @param containerMimeType The MIME type of the container holding the SEI buffers.
    */
-  public SeiReader(List<Format> closedCaptionFormats) {
+  public SeiReader(List<Format> closedCaptionFormats, String containerMimeType) {
     this.closedCaptionFormats = closedCaptionFormats;
+    this.containerMimeType = containerMimeType;
     outputs = new TrackOutput[closedCaptionFormats.size()];
-    reorderingSeiMessageQueue =
-        new ReorderingSeiMessageQueue(
-            ((presentationTimeUs, seiBuffer) ->
-                CeaUtil.consume(presentationTimeUs, seiBuffer, outputs)));
+    reorderingBufferQueue =
+        new ReorderingBufferQueue(
+            (presentationTimeUs, seiBuffer) ->
+                CeaUtil.consume(presentationTimeUs, seiBuffer, outputs));
   }
 
   public void createTracks(ExtractorOutput extractorOutput, TrackIdGenerator idGenerator) {
@@ -63,6 +66,7 @@ public final class SeiReader {
       output.format(
           new Format.Builder()
               .setId(formatId)
+              .setContainerMimeType(containerMimeType)
               .setSampleMimeType(channelMimeType)
               .setSelectionFlags(channelFormat.selectionFlags)
               .setLanguage(channelFormat.language)
@@ -78,11 +82,11 @@ public final class SeiReader {
    * presentation order.
    */
   public void setReorderingQueueSize(int reorderingQueueSize) {
-    reorderingSeiMessageQueue.setMaxSize(reorderingQueueSize);
+    reorderingBufferQueue.setMaxSize(reorderingQueueSize);
   }
 
   public void consume(long pesTimeUs, ParsableByteArray seiBuffer) {
-    reorderingSeiMessageQueue.add(pesTimeUs, seiBuffer);
+    reorderingBufferQueue.add(pesTimeUs, seiBuffer);
   }
 
   /**
@@ -91,6 +95,11 @@ public final class SeiReader {
    * TrackOutput[])}.
    */
   public void flush() {
-    reorderingSeiMessageQueue.flush();
+    reorderingBufferQueue.flush();
+  }
+
+  /** Drops any 'buffered for re-ordering' messages. */
+  public void clear() {
+    reorderingBufferQueue.flush();
   }
 }

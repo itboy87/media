@@ -172,14 +172,14 @@ public class MediaBrowserListenerWithMediaBrowserServiceCompatTest {
   public void getLibraryRoot_browseActionsAvailable() throws Exception {
     remoteService.setProxyForTest(TEST_MEDIA_ITEMS_WITH_BROWSE_ACTIONS);
     CommandButton playlistAddButton =
-        new CommandButton.Builder()
+        new CommandButton.Builder(CommandButton.ICON_UNDEFINED)
             .setDisplayName("Add to playlist")
             .setIconUri(Uri.parse("content://playlist_add"))
             .setSessionCommand(
                 new SessionCommand(MediaBrowserConstants.COMMAND_PLAYLIST_ADD, Bundle.EMPTY))
             .build();
     CommandButton radioButton =
-        new CommandButton.Builder()
+        new CommandButton.Builder(CommandButton.ICON_UNDEFINED)
             .setDisplayName("Radio station")
             .setIconUri(Uri.parse("content://radio"))
             .setSessionCommand(
@@ -222,7 +222,7 @@ public class MediaBrowserListenerWithMediaBrowserServiceCompatTest {
     MediaBrowser mediaBrowser =
         createBrowser(Bundle.EMPTY, /* maxCommandsForMediaItems= */ 1, /* listener= */ null);
     CommandButton playlistAddButton =
-        new CommandButton.Builder()
+        new CommandButton.Builder(CommandButton.ICON_UNDEFINED)
             .setDisplayName("Add to playlist")
             .setIconUri(Uri.parse("content://playlist_add"))
             .setSessionCommand(
@@ -283,8 +283,7 @@ public class MediaBrowserListenerWithMediaBrowserServiceCompatTest {
   }
 
   @Test
-  public void sendCustomCommandWithMediaItem_commandButtonNotAvailable_permissionDenied()
-      throws Exception {
+  public void sendCustomCommandWithMediaItem_commandButtonNotAvailable_succeeds() throws Exception {
     remoteService.setProxyForTest(TEST_MEDIA_ITEMS_WITH_BROWSE_ACTIONS);
     MediaBrowser mediaBrowser =
         createBrowser(
@@ -312,7 +311,7 @@ public class MediaBrowserListenerWithMediaBrowserServiceCompatTest {
                         /* args= */ Bundle.EMPTY))
             .get(TIMEOUT_MS, MILLISECONDS);
 
-    assertThat(sessionResult.resultCode).isEqualTo(SessionResult.RESULT_ERROR_PERMISSION_DENIED);
+    assertThat(sessionResult.resultCode).isEqualTo(SessionResult.RESULT_SUCCESS);
   }
 
   @Test

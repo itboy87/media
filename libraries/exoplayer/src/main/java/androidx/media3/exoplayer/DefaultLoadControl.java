@@ -58,13 +58,13 @@ public class DefaultLoadControl implements LoadControl {
    * The default duration of media that must be buffered for playback to start or resume following a
    * user action such as a seek, in milliseconds.
    */
-  public static final int DEFAULT_BUFFER_FOR_PLAYBACK_MS = 2500;
+  public static final int DEFAULT_BUFFER_FOR_PLAYBACK_MS = 1000;
 
   /**
    * The default duration of media that must be buffered for playback to resume after a rebuffer, in
    * milliseconds. A rebuffer is defined to be caused by buffer depletion rather than a user action.
    */
-  public static final int DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5000;
+  public static final int DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2000;
 
   /**
    * The default target buffer size in bytes. The value ({@link C#LENGTH_UNSET}) means that the load
@@ -97,7 +97,7 @@ public class DefaultLoadControl implements LoadControl {
   public static final int DEFAULT_CAMERA_MOTION_BUFFER_SIZE = 2 * C.DEFAULT_BUFFER_SEGMENT_SIZE;
 
   /** A default size in bytes for an image buffer. */
-  public static final int DEFAULT_IMAGE_BUFFER_SIZE = 2 * C.DEFAULT_BUFFER_SEGMENT_SIZE;
+  public static final int DEFAULT_IMAGE_BUFFER_SIZE = 400 * C.DEFAULT_BUFFER_SEGMENT_SIZE;
 
   /** A default size in bytes for a muxed buffer (e.g. containing video, audio and text). */
   public static final int DEFAULT_MUXED_BUFFER_SIZE =

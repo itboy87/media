@@ -19,6 +19,7 @@ import static androidx.media3.common.util.Assertions.checkArgument;
 import static androidx.media3.common.util.Assertions.checkNotNull;
 import static androidx.media3.common.util.Assertions.checkState;
 import static androidx.media3.muxer.AnnexBUtils.doesSampleContainAnnexBNalUnits;
+import static androidx.media3.muxer.Av1ConfigUtil.createAv1CodecConfigurationRecord;
 import static androidx.media3.muxer.Boxes.BOX_HEADER_SIZE;
 import static androidx.media3.muxer.Boxes.MFHD_BOX_CONTENT_SIZE;
 import static androidx.media3.muxer.Boxes.TFHD_BOX_CONTENT_SIZE;
@@ -28,19 +29,19 @@ import static androidx.media3.muxer.MuxerUtil.UNSIGNED_INT_MAX_VALUE;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
-import android.media.MediaCodec;
-import android.media.MediaCodec.BufferInfo;
+import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.Util;
-import androidx.media3.muxer.Muxer.TrackToken;
 import com.google.common.collect.ImmutableList;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 /**
@@ -63,25 +64,71 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
   }
 
-  private final FileOutputStream outputStream;
-  private final FileChannel output;
+  /** An {@link OutputStream} that tracks the number of bytes written to the stream. */
+  private static class PositionTrackingOutputStream extends OutputStream {
+    private final OutputStream outputStream;
+    private long position;
+
+    public PositionTrackingOutputStream(OutputStream outputStream) {
+      this.outputStream = outputStream;
+      this.position = 0;
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+      position++;
+      outputStream.write(b);
+    }
+
+    @Override
+    public void write(byte[] b) throws IOException {
+      position += b.length;
+      outputStream.write(b);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+      position += len;
+      outputStream.write(b, off, len);
+    }
+
+    @Override
+    public void flush() throws IOException {
+      outputStream.flush();
+    }
+
+    @Override
+    public void close() throws IOException {
+      outputStream.close();
+    }
+
+    /** Returns the number of bytes written to the stream. */
+    public long getPosition() {
+      return position;
+    }
+  }
+
+  private final PositionTrackingOutputStream outputStream;
+  private final WritableByteChannel outputChannel;
   private final MetadataCollector metadataCollector;
   private final AnnexBToAvccConverter annexBToAvccConverter;
   private final long fragmentDurationUs;
   private final boolean sampleCopyEnabled;
   private final @Mp4Muxer.LastSampleDurationBehavior int lastSampleDurationBehavior;
   private final List<Track> tracks;
+  private final LinearByteBufferAllocator linearByteBufferAllocator;
 
   private @MonotonicNonNull Track videoTrack;
   private int currentFragmentSequenceNumber;
   private boolean headerCreated;
   private long minInputPresentationTimeUs;
   private long maxTrackDurationUs;
+  private int nextTrackId;
 
   /**
    * Creates an instance.
    *
-   * @param outputStream The {@link FileOutputStream} to write the data to.
+   * @param outputStream The {@link OutputStream} to write the data to.
    * @param metadataCollector A {@link MetadataCollector}.
    * @param annexBToAvccConverter The {@link AnnexBToAvccConverter} to be used to convert H.264 and
    *     H.265 NAL units from the Annex-B format (using start codes to delineate NAL units) to the
@@ -90,13 +137,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
    * @param sampleCopyEnabled Whether sample copying is enabled.
    */
   public FragmentedMp4Writer(
-      FileOutputStream outputStream,
+      OutputStream outputStream,
       MetadataCollector metadataCollector,
       AnnexBToAvccConverter annexBToAvccConverter,
       long fragmentDurationMs,
       boolean sampleCopyEnabled) {
-    this.outputStream = outputStream;
-    output = outputStream.getChannel();
+    this.outputStream = new PositionTrackingOutputStream(outputStream);
+    this.outputChannel = Channels.newChannel(this.outputStream);
     this.metadataCollector = metadataCollector;
     this.annexBToAvccConverter = annexBToAvccConverter;
     this.fragmentDurationUs = fragmentDurationMs * 1_000;
@@ -106,10 +153,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     tracks = new ArrayList<>();
     minInputPresentationTimeUs = Long.MAX_VALUE;
     currentFragmentSequenceNumber = 1;
+    linearByteBufferAllocator = new LinearByteBufferAllocator(/* initialCapacity= */ 0);
   }
 
-  public TrackToken addTrack(int sortKey, Format format) {
-    Track track = new Track(format, sampleCopyEnabled);
+  public Track addTrack(int sortKey, Format format) {
+    Track track = new Track(nextTrackId++, format, sampleCopyEnabled);
     tracks.add(track);
     if (MimeTypes.isVideo(format.sampleMimeType)) {
       videoTrack = track;
@@ -117,15 +165,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return track;
   }
 
-  public void writeSampleData(
-      TrackToken token, ByteBuffer byteBuffer, MediaCodec.BufferInfo bufferInfo)
+  public void writeSampleData(Track track, ByteBuffer byteBuffer, BufferInfo bufferInfo)
       throws IOException {
-    checkArgument(token instanceof Track);
+    if (Objects.equals(track.format.sampleMimeType, MimeTypes.VIDEO_AV1)
+        && track.format.initializationData.isEmpty()
+        && track.parsedCsd == null) {
+      track.parsedCsd = createAv1CodecConfigurationRecord(byteBuffer.duplicate());
+    }
     if (!headerCreated) {
       createHeader();
       headerCreated = true;
     }
-    Track track = (Track) token;
     if (shouldFlushPendingSamples(track, bufferInfo)) {
       createFragment();
     }
@@ -144,7 +194,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     try {
       createFragment();
     } finally {
-      output.close();
+      outputChannel.close();
       outputStream.close();
     }
   }
@@ -163,6 +213,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           Boxes.traf(
               Boxes.tfhd(currentTrackInfo.trackId, /* baseDataOffset= */ moofBoxStartPosition),
               Boxes.trun(
+                  currentTrackInfo.trackFormat,
                   currentTrackInfo.pendingSamplesMetadata,
                   dataOffset,
                   currentTrackInfo.hasBFrame)));
@@ -200,22 +251,20 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   }
 
   private void createHeader() throws IOException {
-    output.position(0L);
-    output.write(Boxes.ftyp());
-    output.write(
+    outputChannel.write(Boxes.ftyp());
+    outputChannel.write(
         Boxes.moov(
             tracks, metadataCollector, /* isFragmentedMp4= */ true, lastSampleDurationBehavior));
   }
 
-  private boolean shouldFlushPendingSamples(
-      Track track, MediaCodec.BufferInfo nextSampleBufferInfo) {
+  private boolean shouldFlushPendingSamples(Track track, BufferInfo nextSampleBufferInfo) {
     // If video track is present then fragment will be created based on group of pictures and
     // track's duration so far.
     if (videoTrack != null) {
       // Video samples can be written only when complete group of pictures are present.
       if (track.equals(videoTrack)
           && track.hadKeyframe
-          && ((nextSampleBufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) > 0)) {
+          && ((nextSampleBufferInfo.flags & C.BUFFER_FLAG_KEY_FRAME) > 0)) {
         BufferInfo firstPendingSample = checkNotNull(track.pendingSamplesBufferInfo.peekFirst());
         BufferInfo lastPendingSample = checkNotNull(track.pendingSamplesBufferInfo.peekLast());
         return lastPendingSample.presentationTimeUs - firstPendingSample.presentationTimeUs
@@ -241,48 +290,51 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
      */
     ImmutableList<ProcessedTrackInfo> trackInfos = processAllTracks();
     ImmutableList<ByteBuffer> trafBoxes =
-        createTrafBoxes(trackInfos, /* moofBoxStartPosition= */ output.position());
+        createTrafBoxes(trackInfos, /* moofBoxStartPosition= */ outputStream.getPosition());
     if (trafBoxes.isEmpty()) {
       return;
     }
-    output.write(Boxes.moof(Boxes.mfhd(currentFragmentSequenceNumber), trafBoxes));
+    outputChannel.write(Boxes.moof(Boxes.mfhd(currentFragmentSequenceNumber), trafBoxes));
 
     writeMdatBox(trackInfos);
 
     currentFragmentSequenceNumber++;
+    maxTrackDurationUs = 0;
   }
 
   private void writeMdatBox(List<ProcessedTrackInfo> trackInfos) throws IOException {
-    long mdatStartPosition = output.position();
-    int mdatHeaderSize = 8; // 4 bytes (box size) + 4 bytes (box name)
-    ByteBuffer header = ByteBuffer.allocate(mdatHeaderSize);
-    header.putInt(mdatHeaderSize); // The total box size so far.
-    header.put(Util.getUtf8Bytes("mdat"));
-    header.flip();
-    output.write(header);
-
-    long bytesWritten = 0;
+    long totalNumBytesSamples = 0;
     for (int trackInfoIndex = 0; trackInfoIndex < trackInfos.size(); trackInfoIndex++) {
       ProcessedTrackInfo currentTrackInfo = trackInfos.get(trackInfoIndex);
       for (int sampleIndex = 0;
           sampleIndex < currentTrackInfo.pendingSamplesByteBuffer.size();
           sampleIndex++) {
-        bytesWritten += output.write(currentTrackInfo.pendingSamplesByteBuffer.get(sampleIndex));
+        totalNumBytesSamples +=
+            currentTrackInfo.pendingSamplesByteBuffer.get(sampleIndex).remaining();
       }
     }
 
-    long currentPosition = output.position();
+    int mdatHeaderSize = 8; // 4 bytes (box size) + 4 bytes (box name)
+    ByteBuffer header = ByteBuffer.allocate(mdatHeaderSize);
+    long totalMdatSize = mdatHeaderSize + totalNumBytesSamples;
 
-    output.position(mdatStartPosition);
-    ByteBuffer mdatSizeByteBuffer = ByteBuffer.allocate(4);
-    long mdatSize = bytesWritten + mdatHeaderSize;
     checkArgument(
-        mdatSize <= UNSIGNED_INT_MAX_VALUE,
+        totalMdatSize <= UNSIGNED_INT_MAX_VALUE,
         "Only 32-bit long mdat size supported in the fragmented MP4");
-    mdatSizeByteBuffer.putInt((int) mdatSize);
-    mdatSizeByteBuffer.flip();
-    output.write(mdatSizeByteBuffer);
-    output.position(currentPosition);
+    header.putInt((int) totalMdatSize);
+    header.put(Util.getUtf8Bytes("mdat"));
+    header.flip();
+    outputChannel.write(header);
+
+    for (int trackInfoIndex = 0; trackInfoIndex < trackInfos.size(); trackInfoIndex++) {
+      ProcessedTrackInfo currentTrackInfo = trackInfos.get(trackInfoIndex);
+      for (int sampleIndex = 0;
+          sampleIndex < currentTrackInfo.pendingSamplesByteBuffer.size();
+          sampleIndex++) {
+        outputChannel.write(currentTrackInfo.pendingSamplesByteBuffer.get(sampleIndex));
+      }
+    }
+    linearByteBufferAllocator.reset();
   }
 
   private ImmutableList<ProcessedTrackInfo> processAllTracks() {
@@ -301,17 +353,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     ImmutableList.Builder<ByteBuffer> pendingSamplesByteBuffer = new ImmutableList.Builder<>();
     ImmutableList.Builder<BufferInfo> pendingSamplesBufferInfoBuilder =
         new ImmutableList.Builder<>();
-    if (doesSampleContainAnnexBNalUnits(checkNotNull(track.format.sampleMimeType))) {
+    if (doesSampleContainAnnexBNalUnits(track.format)) {
       while (!track.pendingSamplesByteBuffer.isEmpty()) {
         ByteBuffer currentSampleByteBuffer = track.pendingSamplesByteBuffer.removeFirst();
-        currentSampleByteBuffer = annexBToAvccConverter.process(currentSampleByteBuffer);
+        currentSampleByteBuffer =
+            annexBToAvccConverter.process(currentSampleByteBuffer, linearByteBufferAllocator);
         pendingSamplesByteBuffer.add(currentSampleByteBuffer);
         BufferInfo currentSampleBufferInfo = track.pendingSamplesBufferInfo.removeFirst();
-        currentSampleBufferInfo.set(
-            currentSampleByteBuffer.position(),
-            currentSampleByteBuffer.remaining(),
-            currentSampleBufferInfo.presentationTimeUs,
-            currentSampleBufferInfo.flags);
+        currentSampleBufferInfo =
+            new BufferInfo(
+                currentSampleBufferInfo.presentationTimeUs,
+                currentSampleByteBuffer.remaining(),
+                currentSampleBufferInfo.flags);
         pendingSamplesBufferInfoBuilder.add(currentSampleBufferInfo);
       }
     } else {
@@ -351,6 +404,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     return new ProcessedTrackInfo(
         trackId,
+        track.format,
         totalSamplesSize,
         hasBFrame,
         pendingSamplesByteBuffer.build(),
@@ -359,6 +413,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   private static class ProcessedTrackInfo {
     public final int trackId;
+    public final Format trackFormat;
     public final int totalSamplesSize;
     public final boolean hasBFrame;
     public final ImmutableList<ByteBuffer> pendingSamplesByteBuffer;
@@ -366,11 +421,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     public ProcessedTrackInfo(
         int trackId,
+        Format trackFormat,
         int totalSamplesSize,
         boolean hasBFrame,
         ImmutableList<ByteBuffer> pendingSamplesByteBuffer,
         ImmutableList<SampleMetadata> pendingSamplesMetadata) {
       this.trackId = trackId;
+      this.trackFormat = trackFormat;
       this.totalSamplesSize = totalSamplesSize;
       this.hasBFrame = hasBFrame;
       this.pendingSamplesByteBuffer = pendingSamplesByteBuffer;

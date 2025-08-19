@@ -53,6 +53,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeoutException;
 
 /** A mock implementation of {@link Player} for testing. */
@@ -371,7 +372,7 @@ public class MockPlayer implements Player {
     commands = new Player.Commands.Builder().addAllCommands().build();
 
     currentTracks = Tracks.EMPTY;
-    trackSelectionParameters = TrackSelectionParameters.DEFAULT_WITHOUT_CONTEXT;
+    trackSelectionParameters = TrackSelectionParameters.DEFAULT;
   }
 
   @Override
@@ -574,7 +575,7 @@ public class MockPlayer implements Player {
   }
 
   public void notifyAvailableCommandsChanged(Commands commands) {
-    if (Util.areEqual(this.commands, commands)) {
+    if (Objects.equals(this.commands, commands)) {
       return;
     }
     this.commands = commands;
@@ -630,6 +631,9 @@ public class MockPlayer implements Player {
       return;
     }
     boolean wasPlaying = isPlaying();
+    if (playbackState != STATE_IDLE) {
+      this.playerError = null;
+    }
     this.playbackState = playbackState;
     boolean isPlaying = isPlaying();
     for (Listener listener : listeners) {
@@ -665,7 +669,7 @@ public class MockPlayer implements Player {
   }
 
   public void notifyPlaybackParametersChanged(PlaybackParameters playbackParameters) {
-    if (Util.areEqual(this.playbackParameters, playbackParameters)) {
+    if (Objects.equals(this.playbackParameters, playbackParameters)) {
       return;
     }
     this.playbackParameters = playbackParameters;
@@ -1080,24 +1084,6 @@ public class MockPlayer implements Player {
     checkNotNull(conditionVariables.get(METHOD_REPLACE_MEDIA_ITEMS)).open();
   }
 
-  /**
-   * @deprecated Use {@link #hasNextMediaItem()} instead.
-   */
-  @Deprecated
-  @Override
-  public boolean hasNext() {
-    throw new UnsupportedOperationException();
-  }
-
-  /**
-   * @deprecated Use {@link #hasNextMediaItem()} instead.
-   */
-  @Deprecated
-  @Override
-  public boolean hasNextWindow() {
-    throw new UnsupportedOperationException();
-  }
-
   @Override
   public boolean hasPreviousMediaItem() {
     throw new UnsupportedOperationException();
@@ -1105,33 +1091,6 @@ public class MockPlayer implements Player {
 
   @Override
   public boolean hasNextMediaItem() {
-    throw new UnsupportedOperationException();
-  }
-
-  /**
-   * @deprecated Use {@link #seekToNextMediaItem()} instead.
-   */
-  @Deprecated
-  @Override
-  public void next() {
-    throw new UnsupportedOperationException();
-  }
-
-  /**
-   * @deprecated Use {@link #seekToPreviousMediaItem()} instead.
-   */
-  @Deprecated
-  @Override
-  public void seekToPreviousWindow() {
-    throw new UnsupportedOperationException();
-  }
-
-  /**
-   * @deprecated Use {@link #seekToNextMediaItem()} instead.
-   */
-  @Deprecated
-  @Override
-  public void seekToNextWindow() {
     throw new UnsupportedOperationException();
   }
 

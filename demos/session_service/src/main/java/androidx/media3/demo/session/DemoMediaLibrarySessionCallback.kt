@@ -15,14 +15,17 @@
  */
 package androidx.media3.demo.session
 
-import android.content.Context
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.core.net.toUri
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.demo.session.service.R
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
@@ -32,24 +35,28 @@ import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.guava.future
 
 /** A [MediaLibraryService.MediaLibrarySession.Callback] implementation. */
-open class DemoMediaLibrarySessionCallback(context: Context) :
+open class DemoMediaLibrarySessionCallback(val service: DemoPlaybackService) :
   MediaLibraryService.MediaLibrarySession.Callback {
 
   init {
-    MediaItemTree.initialize(context.assets)
+    MediaItemTree.initialize(service.assets)
   }
 
-  @OptIn(UnstableApi::class) // TODO: b/328238954 - Remove once new CommandButton icons are stable.
-  private val customLayoutCommandButtons: List<CommandButton> =
+  private val commandButtons: List<CommandButton> =
     listOf(
       CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF)
-        .setDisplayName(context.getString(R.string.exo_controls_shuffle_on_description))
+        .setDisplayName(service.getString(R.string.exo_controls_shuffle_on_description))
         .setSessionCommand(SessionCommand(CUSTOM_COMMAND_TOGGLE_SHUFFLE_MODE_ON, Bundle.EMPTY))
         .build(),
       CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON)
-        .setDisplayName(context.getString(R.string.exo_controls_shuffle_off_description))
+        .setDisplayName(service.getString(R.string.exo_controls_shuffle_off_description))
         .setSessionCommand(SessionCommand(CUSTOM_COMMAND_TOGGLE_SHUFFLE_MODE_OFF, Bundle.EMPTY))
         .build(),
     )
@@ -59,7 +66,7 @@ open class DemoMediaLibrarySessionCallback(context: Context) :
     MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
       .also { builder ->
         // Put all custom session commands in the list that may be used by the notification.
-        customLayoutCommandButtons.forEach { commandButton ->
+        commandButtons.forEach { commandButton ->
           commandButton.sessionCommand?.let { builder.add(it) }
         }
       }
@@ -78,13 +85,13 @@ open class DemoMediaLibrarySessionCallback(context: Context) :
         session.isAutoCompanionController(controller)
     ) {
       // Select the button to display.
-      val customLayout = customLayoutCommandButtons[if (session.player.shuffleModeEnabled) 1 else 0]
+      val customButton = commandButtons[if (session.player.shuffleModeEnabled) 1 else 0]
       return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
         .setAvailableSessionCommands(mediaNotificationSessionCommands)
-        .setCustomLayout(ImmutableList.of(customLayout))
+        .setMediaButtonPreferences(ImmutableList.of(customButton))
         .build()
     }
-    // Default commands without custom layout for common controllers.
+    // Default commands without media button preferences for common controllers.
     return MediaSession.ConnectionResult.AcceptedResultBuilder(session).build()
   }
 
@@ -98,19 +105,19 @@ open class DemoMediaLibrarySessionCallback(context: Context) :
     if (CUSTOM_COMMAND_TOGGLE_SHUFFLE_MODE_ON == customCommand.customAction) {
       // Enable shuffling.
       session.player.shuffleModeEnabled = true
-      // Change the custom layout to contain the `Disable shuffling` command.
-      session.setCustomLayout(
+      // Change the media button preferences to contain the `Disable shuffling` button.
+      session.setMediaButtonPreferences(
         session.mediaNotificationControllerInfo!!,
-        ImmutableList.of(customLayoutCommandButtons[1]),
+        ImmutableList.of(commandButtons[1]),
       )
       return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
     } else if (CUSTOM_COMMAND_TOGGLE_SHUFFLE_MODE_OFF == customCommand.customAction) {
       // Disable shuffling.
       session.player.shuffleModeEnabled = false
-      // Change the custom layout to contain the `Enable shuffling` command.
-      session.setCustomLayout(
+      // Change the media button preferences to contain the `Enable shuffling` button.
+      session.setMediaButtonPreferences(
         session.mediaNotificationControllerInfo!!,
-        ImmutableList.of(customLayoutCommandButtons[0]),
+        ImmutableList.of(commandButtons[0]),
       )
       return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
     }
@@ -180,6 +187,48 @@ open class DemoMediaLibrarySessionCallback(context: Context) :
     )
   }
 
+  @OptIn(UnstableApi::class) // onPlaybackResumption callback + MediaItemsWithStartPosition
+  override fun onPlaybackResumption(
+    mediaSession: MediaSession,
+    controller: MediaSession.ControllerInfo,
+  ): ListenableFuture<MediaItemsWithStartPosition> {
+    return CoroutineScope(Dispatchers.Unconfined).future {
+      service.retrieveLastStoredMediaItem()?.let {
+        var extras: Bundle? = null
+        if (it.durationMs != C.TIME_UNSET) {
+          extras = Bundle()
+          extras.putInt(
+            MediaConstants.EXTRAS_KEY_COMPLETION_STATUS,
+            MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_PARTIALLY_PLAYED,
+          )
+          extras.putDouble(
+            MediaConstants.EXTRAS_KEY_COMPLETION_PERCENTAGE,
+            max(0.0, min(1.0, it.positionMs.toDouble() / it.durationMs)),
+          )
+        }
+        maybeExpandSingleItemToPlaylist(
+            mediaItem =
+              MediaItem.Builder()
+                .setMediaId(it.mediaId)
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setArtworkUri(it.artworkOriginalUri.toUri())
+                    .setArtworkData(it.artworkData.toByteArray(), MediaMetadata.PICTURE_TYPE_MEDIA)
+                    .setExtras(extras)
+                    .build()
+                )
+                .build(),
+            startIndex = 0,
+            startPositionMs = it.positionMs,
+          )
+          ?.let {
+            return@future it
+          }
+      }
+      throw IllegalStateException("previous media id not found")
+    }
+  }
+
   private fun resolveMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
     val playlist = mutableListOf<MediaItem>()
     mediaItems.forEach { mediaItem ->
@@ -208,8 +257,8 @@ open class DemoMediaLibrarySessionCallback(context: Context) :
         // Try to get the parent and its children.
         MediaItemTree.getParentId(mediaId)?.let {
           playlist =
-            MediaItemTree.getChildren(it).map { mediaItem ->
-              if (mediaItem.mediaId == mediaId) MediaItemTree.expandItem(mediaItem)!! else mediaItem
+            MediaItemTree.getChildren(it).map { childItem ->
+              if (childItem.mediaId == mediaId) MediaItemTree.expandItem(mediaItem)!! else childItem
             }
           indexInPlaylist = MediaItemTree.getIndexInMediaItems(mediaId, playlist)
         }
