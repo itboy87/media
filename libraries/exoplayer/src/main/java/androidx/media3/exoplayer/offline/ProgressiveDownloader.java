@@ -33,6 +33,7 @@ import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.CacheWriter;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
@@ -130,7 +131,7 @@ public final class ProgressiveDownloader implements Downloader {
     dataSpec =
         new DataSpec.Builder()
             .setUri(mediaItem.localConfiguration.uri)
-            .setHttpRequestHeaders(mediaItem.localConfiguration.headers)
+            .setHttpRequestHeaders(mediaItem.localConfiguration.headers == null ? new HashMap<>() : mediaItem.localConfiguration.headers)
             .setKey(mediaItem.localConfiguration.customCacheKey)
             .setFlags(DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION)
             .setPosition(position)

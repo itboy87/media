@@ -237,7 +237,7 @@ public final class DownloadRequest implements Parcelable {
   /* package */ DownloadRequest(Parcel in) {
     id = castNonNull(in.readString());
     uri = Uri.parse(castNonNull(in.readString()));
-    headers = in.readHashMap((new HashMap<>()).getClass().getClassLoader());
+    headers = in.readHashMap(HashMap.class.getClassLoader());
     mimeType = in.readString();
     int streamKeyCount = in.readInt();
     ArrayList<StreamKey> mutableStreamKeys = new ArrayList<>(streamKeyCount);
@@ -260,7 +260,7 @@ public final class DownloadRequest implements Parcelable {
    */
   public DownloadRequest copyWithId(String id) {
     return new DownloadRequest(
-        id, headers, uri, mimeType, streamKeys, keySetId, customCacheKey, data, byteRange, timeRange);
+        id, uri, headers, mimeType, streamKeys, keySetId, customCacheKey, data, byteRange, timeRange);
   }
 
   /**
@@ -271,7 +271,7 @@ public final class DownloadRequest implements Parcelable {
    */
   public DownloadRequest copyWithKeySetId(@Nullable byte[] keySetId) {
     return new DownloadRequest(
-        id, headers, uri, mimeType, streamKeys, keySetId, customCacheKey, data, byteRange, timeRange);
+        id, uri, headers, mimeType, streamKeys, keySetId, customCacheKey, data, byteRange, timeRange);
   }
 
   /**

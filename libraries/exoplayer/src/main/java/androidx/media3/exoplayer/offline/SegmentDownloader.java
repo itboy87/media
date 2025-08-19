@@ -196,7 +196,7 @@ public abstract class SegmentDownloader<M extends FilterableManifest<M>> impleme
       long startPositionUs,
       long durationUs) {
     checkNotNull(mediaItem.localConfiguration);
-    this.manifestDataSpec = getCompressibleDataSpec(mediaItem.localConfiguration.uri, mediaItem.localConfiguration.headers);
+    this.manifestDataSpec = getCompressibleDataSpec(mediaItem.localConfiguration.uri, mediaItem.localConfiguration.headers == null ? new HashMap<>() : mediaItem.localConfiguration.headers);
     this.manifestParser = manifestParser;
     this.streamKeys = new ArrayList<>(mediaItem.localConfiguration.streamKeys);
     this.cacheDataSourceFactory = cacheDataSourceFactory;

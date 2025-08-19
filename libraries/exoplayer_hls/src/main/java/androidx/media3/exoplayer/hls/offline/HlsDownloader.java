@@ -33,6 +33,7 @@ import androidx.media3.exoplayer.upstream.ParsingLoadable.Parser;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -216,7 +217,7 @@ public final class HlsDownloader extends SegmentDownloader<HlsPlaylist> {
         maxMergedSegmentStartTimeDiffMs,
         startPositionUs,
         durationUs);
-    this.headers = mediaItem.localConfiguration.headers;
+    this.headers = mediaItem.localConfiguration.headers == null ? new HashMap<>() : mediaItem.localConfiguration.headers;
   }
 
   @Override

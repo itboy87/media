@@ -1206,7 +1206,7 @@ public final class MediaItem {
         @Nullable Object tag,
         long imageDurationMs) {
       this.uri = uri;
-      this.headers = headers == null ? new HashMap<>() : headers;
+      this.headers = headers;
       this.mimeType = MimeTypes.normalizeMimeType(mimeType);
       this.drmConfiguration = drmConfiguration;
       this.adsConfiguration = adsConfiguration;
@@ -1336,7 +1336,7 @@ public final class MediaItem {
       long imageDurationMs = bundle.getLong(FIELD_IMAGE_DURATION_MS, C.TIME_UNSET);
 
       Bundle headerBundle = bundle.getBundle(FIELD_HEADERS);
-      Map<String, String> headers = BundleCollectionUtil.bundleToStringHashMap(headerBundle == null ? Bundle.EMPTY : headerBundle);
+      Map<String, String> headers = headerBundle == null ? null : BundleCollectionUtil.bundleToStringHashMap(headerBundle);
       return new LocalConfiguration(
           checkNotNull(bundle.getParcelable(FIELD_URI)),
           headers,
